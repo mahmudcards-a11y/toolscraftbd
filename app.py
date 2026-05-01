@@ -5,10 +5,10 @@ import fitz  # PyMuPDF
 import shutil
 import hashlib
 import uuid
-import gc     # RAM ফ্রি করার জন্য যুক্ত করা হয়েছে
-import time   # 10 সেকেন্ড অপেক্ষা করার জন্য যুক্ত করা হয়েছে
+import gc     # RAM ফ্রি করার জন্য যুক্ত করা হয়েছে
+import time   # 10 সেকেন্ড অপেক্ষা করার জন্য যুক্ত করা হয়েছে
 from datetime import datetime, timedelta
-from fastapi import FastAPI, UploadFile, File, Form, Request, Depends, BackgroundTasks # BackgroundTasks যুক্ত করা হয়েছে
+from fastapi import FastAPI, UploadFile, File, Form, Request, Depends, BackgroundTasks # BackgroundTasks যুক্ত করা হয়েছে
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -198,8 +198,18 @@ def process_master_pdf(user_pdf_path, output_path, original_filename, ai_percent
         header_title = "Cover Page" if i == 0 else "AI Writing Overview" if i == 1 else "AI Writing Submission"
         header_text = f"Page {i + 1} of {len(template_doc)} - {header_title}"
         
-        page.draw_rect(fitz.Rect(0, 0, rect.width, header_height), fill=(1, 1, 1), color=None, overlay=True)
-        page.draw_rect(fitz.Rect(0, rect.height - footer_height, rect.width, rect.height), fill=(1, 1, 1), color=None, overlay=True)
+        # Header ও Footer এর rect তৈরি
+        header_rect = fitz.Rect(0, 0, rect.width, header_height)
+        footer_rect = fitz.Rect(0, rect.height - footer_height, rect.width, rect.height)
+
+        # ধাপ ১: আগে পুরনো header/footer area redact করো (নিচের text মুছে ফেলো)
+        page.draw_rect(header_rect, fill=(1, 1, 1), color=None, overlay=True)
+        page.draw_rect(footer_rect, fill=(1, 1, 1), color=None, overlay=True)
+        page.add_redact_annot(header_rect, fill=(1, 1, 1))
+        page.add_redact_annot(footer_rect, fill=(1, 1, 1))
+        page.apply_redactions()
+
+        # ধাপ ২: পরিষ্কার সাদা background-এ নতুন করে logo ও text বসাও
         if os.path.exists("static/logo.png"):
             page.insert_image(fitz.Rect(20, 15, 90, 35), filename="static/logo.png")
             page.insert_image(fitz.Rect(20, rect.height - 35, 90, rect.height - 15), filename="static/logo.png")
@@ -207,20 +217,22 @@ def process_master_pdf(user_pdf_path, output_path, original_filename, ai_percent
         page.insert_text(fitz.Point(rect.width - 200, 30), f"Submission ID {new_id}", fontsize=7, color=(0, 0, 0))
         page.insert_text(fitz.Point(110, rect.height - 20), header_text, fontsize=7, color=(0, 0, 0))
         page.insert_text(fitz.Point(rect.width - 200, rect.height - 20), f"Submission ID {new_id}", fontsize=7, color=(0, 0, 0))
-        
-        header_rect = fitz.Rect(0, 0, rect.width, header_height)
-        footer_rect = fitz.Rect(0, rect.height - footer_height, rect.width, rect.height)
-        
-        # পরিবর্তন ১: RAM বাঁচানোর জন্য রেজোলিউশন কমানো (1.5x)
-        mat = fitz.Matrix(1.5, 1.5)  
+
+        # ধাপ ৩: এখন high-res (3x) pixmap নাও — logo ও text সহ সবকিছু ধরা পড়বে
+        mat = fitz.Matrix(3.0, 3.0)
         header_pix = page.get_pixmap(matrix=mat, clip=header_rect, colorspace=fitz.csRGB)
         footer_pix = page.get_pixmap(matrix=mat, clip=footer_rect, colorspace=fitz.csRGB)
-        
-        header_jpeg = header_pix.tobytes("jpeg", jpg_quality=90)
-        footer_jpeg = footer_pix.tobytes("jpeg", jpg_quality=90)
+
+        header_jpeg = header_pix.tobytes("jpeg", jpg_quality=95)
+        footer_jpeg = footer_pix.tobytes("jpeg", jpg_quality=95)
+
+        # ধাপ ৪: আবার redact করো — এবার text+logo সব মিলিয়ে image হিসেবে flatten করো
+        # (এতে header/footer এর কোনো text কপি করা যাবে না)
         page.add_redact_annot(header_rect, fill=(1, 1, 1))
         page.add_redact_annot(footer_rect, fill=(1, 1, 1))
         page.apply_redactions()
+
+        # ধাপ ৫: high-res image হিসেবে বসাও
         page.insert_image(header_rect, stream=header_jpeg)
         page.insert_image(footer_rect, stream=footer_jpeg)
         
@@ -229,7 +241,7 @@ def process_master_pdf(user_pdf_path, output_path, original_filename, ai_percent
     template_doc.close()
     user_doc.close()
     
-    # পরিবর্তন ২: RAM থেকে অপ্রয়োজনীয় ক্যাশ মুছে ফেলা
+    # RAM থেকে অপ্রয়োজনীয় ক্যাশ মুছে ফেলা
     del template_doc
     del user_doc
     gc.collect() 
@@ -251,7 +263,7 @@ def apply_header_and_footer(input_pdf_path, output_path, shared_id):
     doc.save(output_path)
     doc.close()
     
-    # মেমরি ক্লিয়ার করা
+    # মেমরি ক্লিয়ার করা
     del doc
     gc.collect()
 
@@ -346,9 +358,9 @@ async def upload_file(request: Request, file_ai: UploadFile = File(...), file_si
     except Exception as e:
         return HTMLResponse(content=f"<h3>Error: {str(e)}</h3>", status_code=500)
 
-# পরিবর্তন ৩: ফাইল ডিলিট করার ব্যাকগ্রাউন্ড ফাংশন
+# ফাইল ডিলিট করার ব্যাকগ্রাউন্ড ফাংশন
 def delete_file_and_history(file_id: int, output_path: str, upload_filename: str):
-    time.sleep(30)  # ৩০ সেকেন্ড অপেক্ষা করবে
+    time.sleep(30)  # 30 সেকেন্ড অপেক্ষা করবে
     try:
         # লোকাল স্টোরেজ থেকে ডিলিট
         if os.path.exists(output_path): os.remove(output_path)
