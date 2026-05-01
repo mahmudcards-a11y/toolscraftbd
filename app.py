@@ -348,7 +348,7 @@ async def upload_file(request: Request, file_ai: UploadFile = File(...), file_si
 
 # পরিবর্তন ৩: ফাইল ডিলিট করার ব্যাকগ্রাউন্ড ফাংশন
 def delete_file_and_history(file_id: int, output_path: str, upload_filename: str):
-    time.sleep(10)  # ১০ সেকেন্ড অপেক্ষা করবে
+    time.sleep(30)  # ৩০ সেকেন্ড অপেক্ষা করবে
     try:
         # লোকাল স্টোরেজ থেকে ডিলিট
         if os.path.exists(output_path): os.remove(output_path)
